@@ -1,6 +1,6 @@
 {
   "name": "tizenbrew-7reels",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "7reels.cc Samsung TV-re: távirányítós navigáció, pop-up tiltás, adblock",
   "packageType": "mods",
   "appName": "7Reels",
@@ -13,8 +13,10 @@
     "MediaStop",
     "MediaRewind",
     "MediaFastForward",
+    "ColorF0Red",
     "ColorF2Yellow",
-    "ColorF3Blue"
+    "ColorF3Blue",
+    "0"
   ],
   "files": [
     "inject.js"

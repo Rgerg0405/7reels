@@ -1,16 +1,19 @@
 /*
- * 7Reels TizenBrew modul v1.1
- * - Netflix-szerű távirányítós navigáció (sorok/oszlopok, oszlopmemória,
- *   kiemelés nagyítással, finom görgetés)
- * - pop-up / átirányítás tiltás, adblock (kapcsolható)
- * - ellenőrző (robot-check) oldalakon a modul félreáll
- * Gombok: nyilak, OK, Back, média gombok,
- *         SÁRGA = blokkolás be/ki, KÉK = nagyítás (100/125/150%)
+ * 7Reels TizenBrew modul v1.2
+ * - elemkeresés: linkek, gombok ÉS minden kéz-kurzoros (kattintható) elem
+ * - fókusz mód (Netflix-szerű) + automatikus kurzor mód tartaléknak
+ * - állapotjelző a képernyő sarkában
+ * - blokkolás alapból KI (sárga gomb: be/ki)
+ * Gombok: nyilak, OK, Back, média gombok
+ *   PIROS = fókusz/kurzor mód váltás   SÁRGA = blokkolás be/ki
+ *   KÉK = nagyítás                     0 = állapotjelző ki/be
  */
 (function () {
   'use strict';
   if (window.__reelsTvLoaded) return;
   window.__reelsTvLoaded = true;
+
+  var VERSION = '1.2';
 
   /* ================= BEÁLLÍTÁSOK ================= */
 
@@ -38,13 +41,14 @@
   var K = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, BACK: 10009,
     PLAY: 415, PAUSE: 19, PLAYPAUSE: 10252, STOP: 413, REW: 412, FF: 417,
-    YELLOW: 405, BLUE: 406
+    RED: 403, YELLOW: 405, BLUE: 406, ZERO: 48
   };
 
   /* ================= ÁLLAPOT ================= */
 
-  var state = { blocking: true, verifying: false, zoomIdx: 0 };
-  var STORE_KEY = 'reels-tv-v1';
+  var state = { blocking: false, verifying: false, zoomIdx: 0, pointer: false };
+  var STORE_KEY = 'reels-tv-v2';
+  var errCount = 0;
 
   function loadState() {
     try {
@@ -67,7 +71,13 @@
   applyBlockClass();
   applyZoom();
 
-  /* ================= ÉRTESÍTÉS ================= */
+  window.addEventListener('error', function () { errCount++; });
+
+  /* ================= ÉRTESÍTÉS + ÁLLAPOTJELZŐ ================= */
+
+  function appendUi(el) {
+    (document.body || document.documentElement).appendChild(el);
+  }
 
   var toastEl = null, toastTimer = null;
   function toast(msg) {
@@ -76,13 +86,39 @@
         toastEl = document.createElement('div');
         toastEl.style.cssText = 'position:fixed;top:24px;right:24px;z-index:2147483647;' +
           'background:rgba(0,0,0,.88);color:#fff;font:600 24px/1.3 sans-serif;padding:14px 22px;' +
-          'border-radius:10px;pointer-events:none;transition:opacity .2s;opacity:0';
-        (document.body || document.documentElement).appendChild(toastEl);
+          'border-radius:10px;pointer-events:none;transition:opacity .2s;opacity:0;max-width:60vw';
+        appendUi(toastEl);
       }
       toastEl.textContent = msg;
       toastEl.style.opacity = '1';
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(function () { toastEl.style.opacity = '0'; }, 2200);
+      toastTimer = setTimeout(function () { toastEl.style.opacity = '0'; }, 2600);
+    } catch (e) {}
+  }
+
+  var badgeEl = null, badgeTimer = null, badgePinned = false;
+  function badgeText() {
+    return '7Reels mod v' + VERSION +
+      ' | elemek: ' + cache.length +
+      ' | mód: ' + (state.pointer ? 'kurzor' : 'fókusz') +
+      ' | blokkolás: ' + (state.blocking ? (state.verifying ? 'szünet' : 'be') : 'ki') +
+      ' | oldalhibák: ' + errCount +
+      ' | ' + location.hostname;
+  }
+  function showBadge(ms) {
+    try {
+      getFocusables();
+      if (!badgeEl) {
+        badgeEl = document.createElement('div');
+        badgeEl.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:2147483647;' +
+          'background:rgba(0,0,0,.82);color:#9f9;font:600 20px/1.3 monospace;padding:8px 14px;' +
+          'border-radius:8px;pointer-events:none;transition:opacity .2s;opacity:0';
+        appendUi(badgeEl);
+      }
+      badgeEl.textContent = badgeText();
+      badgeEl.style.opacity = '1';
+      clearTimeout(badgeTimer);
+      if (!badgePinned) badgeTimer = setTimeout(function () { badgeEl.style.opacity = '0'; }, ms || 5000);
     } catch (e) {}
   }
 
@@ -183,10 +219,9 @@
     var adCss = AD_SELECTORS.map(function (s) { return 'html.reels-block ' + s; }).join(',') +
       '{display:none!important;visibility:hidden!important}';
     var focusCss =
-      'a:focus,button:focus,[role="button"]:focus,[role="link"]:focus,[tabindex]:focus,[onclick]:focus{' +
-        'outline:4px solid #fff!important;outline-offset:3px!important;border-radius:8px;' +
-        'transform:scale(1.07);box-shadow:0 14px 34px rgba(0,0,0,.7);' +
-        'transition:transform .14s ease-out,box-shadow .14s ease-out}' +
+      '[data-reels-focus]{outline:4px solid #fff!important;outline-offset:3px!important;border-radius:8px;' +
+        'transform:scale(1.06);box-shadow:0 14px 34px rgba(0,0,0,.7);' +
+        'transition:transform .14s ease-out,box-shadow .14s ease-out;position:relative;z-index:2147483000}' +
       'input:focus,textarea:focus,select:focus{outline:4px solid #fff!important;outline-offset:2px!important}';
     var s = document.createElement('style');
     s.id = 'reels-tv-css';
@@ -204,12 +239,12 @@
       if (found !== state.verifying) {
         state.verifying = found;
         applyBlockClass();
-        toast(found ? 'Ellenőrző oldal: a blokkolás szünetel' : 'Blokkolás újra aktív');
+        toast(found ? 'Ellenőrző oldal felismerve' : 'Ellenőrző oldal vége');
       }
     } catch (e) {}
   }
 
-  /* ================= TAKARÓ RÉTEGEK ================= */
+  /* ================= TAKARÓ RÉTEGEK (csak blokkolással) ================= */
 
   function looksLikeOverlay(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -235,37 +270,70 @@
     } catch (e) {}
   }
 
-  /* ================= NAVIGÁCIÓ ================= */
+  /* ================= ELEMKERESÉS ================= */
 
-  var FOCUS_SEL = [
+  var BASIC_SEL = [
     'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
     '[tabindex]:not([tabindex="-1"])', '[role="button"]', '[role="link"]', '[onclick]'
   ].join(',');
+  var GENERIC_SEL = 'div, li, span, img, article, figure, section, p, h1, h2, h3, h4, svg';
 
   var cache = [], cacheAt = 0, dirty = true;
-  var stickX = null, stickY = null, lastFocused = null, lastMoveAt = 0;
+
+  function sizeOk(r, minSize, maxFraction) {
+    if (r.width < minSize || r.height < minSize) return false;
+    if (maxFraction && r.width > window.innerWidth * maxFraction && r.height > window.innerHeight * maxFraction) return false;
+    return true;
+  }
 
   function collect() {
-    var all = document.querySelectorAll(FOCUS_SEL);
-    var out = [];
-    for (var i = 0; i < all.length; i++) {
-      var el = all[i];
+    var out = [], seen = [];
+    var basic = document.querySelectorAll(BASIC_SEL);
+    var i, el, r, cs;
+    for (i = 0; i < basic.length; i++) {
+      el = basic[i];
       if (el.disabled) continue;
-      var r = el.getBoundingClientRect();
-      if (r.width < 8 || r.height < 8) continue;
-      var cs = window.getComputedStyle(el);
+      r = el.getBoundingClientRect();
+      if (!sizeOk(r, 8)) continue;
+      cs = window.getComputedStyle(el);
       if (cs.visibility === 'hidden' || cs.display === 'none' || cs.pointerEvents === 'none') continue;
+      out.push(el); seen.push(el);
+    }
+    // kéz-kurzoros (kattintható) elemek: a legkülső elem a láncban
+    var gen = document.querySelectorAll(GENERIC_SEL);
+    var limit = Math.min(gen.length, 4000);
+    for (i = 0; i < limit; i++) {
+      el = gen[i];
+      if (el === document.body || el === document.documentElement) continue;
+      r = el.getBoundingClientRect();
+      if (!sizeOk(r, 24, 0.9)) continue;
+      cs = window.getComputedStyle(el);
+      if (cs.cursor !== 'pointer' || cs.visibility === 'hidden' || cs.display === 'none') continue;
+      var p = el.parentElement;
+      if (p && window.getComputedStyle(p).cursor === 'pointer') continue;
+      if (el.closest && el.closest(BASIC_SEL) && seen.indexOf(el.closest(BASIC_SEL)) !== -1) continue;
       out.push(el);
     }
     return out;
   }
   function getFocusables() {
     var now = Date.now();
-    if (dirty || now - cacheAt > 1000) { cache = collect(); cacheAt = now; dirty = false; }
+    if (dirty || now - cacheAt > 1500) { cache = collect(); cacheAt = now; dirty = false; }
     return cache;
   }
+
+  /* ================= FÓKUSZ MÓD ================= */
+
+  var stickX = null, stickY = null, lastFocused = null, lastMoveAt = 0, current = null;
+
   function cx(r) { return r.left + r.width / 2; }
   function cy(r) { return r.top + r.height / 2; }
+
+  function setCurrent(el) {
+    if (current && current.removeAttribute) current.removeAttribute('data-reels-focus');
+    current = el;
+    if (el) el.setAttribute('data-reels-focus', '1');
+  }
 
   function reveal(el, fast) {
     var r = el.getBoundingClientRect(), vh = window.innerHeight, vw = window.innerWidth;
@@ -277,8 +345,11 @@
 
   function focusEl(el, fast) {
     if (!el) return;
-    if (el.tabIndex < 0 && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
-    el.focus({ preventScroll: true });
+    setCurrent(el);
+    try {
+      if (el.tabIndex < 0 && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+      el.focus({ preventScroll: true });
+    } catch (e) {}
     lastFocused = el;
     reveal(el, fast);
   }
@@ -296,13 +367,13 @@
 
   function moveFocus(dir) {
     var list = getFocusables();
-    if (!list.length) return false;
+    if (!list.length) return null; // null = nincs mit kijelölni
     var now = Date.now();
     var fast = now - lastMoveAt < 250;
     lastMoveAt = now;
 
-    var cur = document.activeElement;
-    if (!cur || cur === document.body || list.indexOf(cur) === -1) {
+    var cur = current && list.indexOf(current) !== -1 ? current : null;
+    if (!cur) {
       var first = pickInitial(list);
       if (first) {
         var fr = first.getBoundingClientRect();
@@ -310,48 +381,46 @@
         focusEl(first, fast);
         return true;
       }
-      return false;
+      return null;
     }
 
     var cr = cur.getBoundingClientRect();
     if (cur !== lastFocused || stickX === null) { stickX = cx(cr); stickY = cy(cr); }
     var horizontal = (dir === K.LEFT || dir === K.RIGHT);
-    var best = null;
+    var best = null, i, el, r;
 
     if (horizontal) {
       var bestScore = Infinity;
-      for (var i = 0; i < list.length; i++) {
-        var el = list[i];
+      for (i = 0; i < list.length; i++) {
+        el = list[i];
         if (el === cur) continue;
-        var r = el.getBoundingClientRect();
+        r = el.getBoundingClientRect();
         var dx = cx(r) - cx(cr);
         if (dir === K.LEFT && dx >= -2) continue;
         if (dir === K.RIGHT && dx <= 2) continue;
-        var primary = Math.abs(dx);
         var overlapY = Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top);
         var sameRow = overlapY > Math.min(cr.height, r.height) * 0.3;
-        var score = primary + (sameRow ? Math.abs(cy(r) - stickY) * 0.5 : 2000 + Math.abs(cy(r) - stickY) * 3);
+        var score = Math.abs(dx) + (sameRow ? Math.abs(cy(r) - stickY) * 0.5 : 2000 + Math.abs(cy(r) - stickY) * 3);
         if (score < bestScore) { bestScore = score; best = el; }
       }
     } else {
       var cands = [], minPrimary = Infinity;
-      for (var j = 0; j < list.length; j++) {
-        var e2 = list[j];
-        if (e2 === cur) continue;
-        var r2 = e2.getBoundingClientRect();
-        var dy = cy(r2) - cy(cr);
+      for (i = 0; i < list.length; i++) {
+        el = list[i];
+        if (el === cur) continue;
+        r = el.getBoundingClientRect();
+        var dy = cy(r) - cy(cr);
         if (dir === K.UP && dy >= -4) continue;
         if (dir === K.DOWN && dy <= 4) continue;
-        var p = Math.abs(dy);
-        cands.push({ el: e2, r: r2, p: p });
-        if (p < minPrimary) minPrimary = p;
+        var pr = Math.abs(dy);
+        cands.push({ el: el, r: r, p: pr });
+        if (pr < minPrimary) minPrimary = pr;
       }
-      var tol = Math.max(80, cr.height * 0.6);
-      var bestDx = Infinity;
-      for (var k = 0; k < cands.length; k++) {
-        if (cands[k].p > minPrimary + tol) continue;
-        var d = Math.abs(cx(cands[k].r) - stickX);
-        if (d < bestDx) { bestDx = d; best = cands[k].el; }
+      var tol = Math.max(80, cr.height * 0.6), bestDx = Infinity;
+      for (i = 0; i < cands.length; i++) {
+        if (cands[i].p > minPrimary + tol) continue;
+        var d = Math.abs(cx(cands[i].r) - stickX);
+        if (d < bestDx) { bestDx = d; best = cands[i].el; }
       }
     }
 
@@ -361,6 +430,88 @@
     focusEl(best, fast);
     return true;
   }
+
+  function activateCurrent() {
+    var el = current;
+    if (!el || !el.isConnected) return false;
+    var t = el.tagName;
+    if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') { try { el.focus(); } catch (e) {} return true; }
+    el.click();
+    return true;
+  }
+
+  /* ================= KURZOR MÓD ================= */
+
+  var ptr = { x: 0, y: 0, el: null, speed: 18, lastAt: 0 };
+
+  function ensurePtr() {
+    if (ptr.el) return ptr.el;
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:0;top:0;width:26px;height:26px;margin:-13px 0 0 -13px;' +
+      'border-radius:50%;background:rgba(255,255,255,.92);border:3px solid #e50914;' +
+      'box-shadow:0 0 12px rgba(0,0,0,.8);z-index:2147483647;pointer-events:none;display:none';
+    appendUi(d);
+    ptr.el = d;
+    return d;
+  }
+  function drawPtr() { ensurePtr().style.transform = 'translate(' + ptr.x + 'px,' + ptr.y + 'px)'; }
+
+  function setPointer(on, silent) {
+    state.pointer = on;
+    ensurePtr().style.display = on ? 'block' : 'none';
+    if (on) {
+      if (current && current.isConnected) {
+        var r = current.getBoundingClientRect();
+        ptr.x = cx(r); ptr.y = cy(r);
+      } else if (!ptr.x && !ptr.y) {
+        ptr.x = window.innerWidth / 2; ptr.y = window.innerHeight / 2;
+      }
+      drawPtr();
+      if (!silent) toast('Kurzor mód: nyilak = mozgatás, OK = kattintás, PIROS = vissza');
+    } else if (!silent) {
+      toast('Fókusz mód');
+    }
+    showBadge(4000);
+  }
+
+  function scrollUnderPointer(dx, dy) {
+    var el = document.elementFromPoint(ptr.x, ptr.y);
+    while (el && el !== document.body && el !== document.documentElement) {
+      var cs = window.getComputedStyle(el);
+      var canY = dy && (cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
+      var canX = dx && (cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth;
+      if (canX || canY) { el.scrollBy(dx, dy); return; }
+      el = el.parentElement;
+    }
+    window.scrollBy(dx, dy);
+  }
+
+  function movePtr(dir) {
+    var now = Date.now();
+    ptr.speed = (now - ptr.lastAt < 160) ? Math.min(70, ptr.speed + 5) : 18;
+    ptr.lastAt = now;
+    var s = ptr.speed, vw = window.innerWidth, vh = window.innerHeight, edge = 36;
+    if (dir === K.LEFT) { ptr.x -= s; if (ptr.x < edge) { scrollUnderPointer(-s * 3, 0); } }
+    if (dir === K.RIGHT) { ptr.x += s; if (ptr.x > vw - edge) { scrollUnderPointer(s * 3, 0); } }
+    if (dir === K.UP) { ptr.y -= s; if (ptr.y < edge) { scrollUnderPointer(0, -s * 4); } }
+    if (dir === K.DOWN) { ptr.y += s; if (ptr.y > vh - edge) { scrollUnderPointer(0, s * 4); } }
+    ptr.x = Math.max(4, Math.min(vw - 4, ptr.x));
+    ptr.y = Math.max(4, Math.min(vh - 4, ptr.y));
+    drawPtr();
+  }
+
+  function ptrClick() {
+    var el = document.elementFromPoint(ptr.x, ptr.y);
+    if (!el) return;
+    var o = { bubbles: true, cancelable: true, view: window, clientX: ptr.x, clientY: ptr.y };
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(function (t) {
+      try { el.dispatchEvent(t.indexOf('pointer') === 0 ? new PointerEvent(t, o) : new MouseEvent(t, o)); } catch (e) {}
+    });
+    try { el.focus({ preventScroll: true }); } catch (e) {}
+    try { el.click(); } catch (e) {}
+  }
+
+  /* ================= EGYÉB BILLENTYŰK ================= */
 
   function isTextField(el) {
     if (!el || !el.tagName) return false;
@@ -384,13 +535,19 @@
 
   document.addEventListener('keydown', function (e) {
     var code = e.keyCode;
-    var active_ = document.activeElement;
+    var ae = document.activeElement;
 
+    if (code === K.RED) {
+      e.preventDefault();
+      setPointer(!state.pointer);
+      return;
+    }
     if (code === K.YELLOW) {
       e.preventDefault();
       state.blocking = !state.blocking;
       saveState(); applyBlockClass();
       toast('Blokkolás: ' + (state.blocking ? 'BE' : 'KI'));
+      showBadge(4000);
       return;
     }
     if (code === K.BLUE) {
@@ -398,6 +555,13 @@
       state.zoomIdx = (state.zoomIdx + 1) % ZOOM_STEPS.length;
       saveState(); applyZoom(); dirty = true;
       toast('Nagyítás: ' + Math.round(ZOOM_STEPS[state.zoomIdx] * 100) + '%');
+      return;
+    }
+    if (code === K.ZERO && !isTextField(ae)) {
+      e.preventDefault();
+      badgePinned = !badgePinned;
+      showBadge(5000);
+      if (!badgePinned && badgeEl) badgeEl.style.opacity = '0';
       return;
     }
 
@@ -418,25 +582,43 @@
       return;
     }
 
-    if (code === K.LEFT || code === K.RIGHT || code === K.UP || code === K.DOWN) {
-      if (isTextField(active_) && (code === K.LEFT || code === K.RIGHT)) {
-        try {
-          var len = (active_.value || '').length;
-          if (code === K.LEFT && active_.selectionStart > 0) return;
-          if (code === K.RIGHT && active_.selectionEnd < len) return;
-        } catch (err) { return; }
-      }
-      // gyors nyomvatartásnál ne ugorjon túl
-      if (e.repeat && Date.now() - lastMoveAt < 80) { e.preventDefault(); return; }
-      if (moveFocus(code)) { e.preventDefault(); e.stopPropagation(); }
+    var isArrow = (code === K.LEFT || code === K.RIGHT || code === K.UP || code === K.DOWN);
+
+    if (state.pointer) {
+      if (isArrow) { e.preventDefault(); e.stopPropagation(); movePtr(code); return; }
+      if (code === K.ENTER) { e.preventDefault(); e.stopPropagation(); ptrClick(); return; }
       return;
     }
 
-    if (code === K.ENTER && active_ && active_ !== document.body) {
-      var t = active_.tagName;
-      if (t !== 'A' && t !== 'BUTTON' && t !== 'INPUT' && t !== 'SELECT' && t !== 'TEXTAREA') {
-        e.preventDefault();
-        active_.click();
+    if (isArrow) {
+      if (isTextField(ae) && (code === K.LEFT || code === K.RIGHT)) {
+        try {
+          var len = (ae.value || '').length;
+          if (code === K.LEFT && ae.selectionStart > 0) return;
+          if (code === K.RIGHT && ae.selectionEnd < len) return;
+        } catch (err) { return; }
+      }
+      if (e.repeat && Date.now() - lastMoveAt < 80) { e.preventDefault(); return; }
+      var res = moveFocus(code);
+      if (res === null) {
+        // nincs kijelölhető elem: átváltunk kurzor módra
+        setPointer(true, true);
+        toast('Nincs kijelölhető elem, kurzor mód (PIROS = váltás)');
+        e.preventDefault(); e.stopPropagation();
+        movePtr(code);
+        return;
+      }
+      if (res) { e.preventDefault(); e.stopPropagation(); }
+      return;
+    }
+
+    if (code === K.ENTER) {
+      if (current && current.isConnected && (!ae || ae === document.body || ae === current || !isTextField(ae))) {
+        var t = current.tagName;
+        if (t !== 'A' && t !== 'BUTTON') {
+          e.preventDefault();
+          activateCurrent();
+        }
       }
     }
   }, true);
@@ -446,8 +628,18 @@
   var sweepTimer = null;
   function onMutation() {
     dirty = true;
+    if (current && !current.isConnected) setCurrent(null);
     if (sweepTimer) return;
     sweepTimer = setTimeout(function () { sweepTimer = null; sweep(); }, 700);
+  }
+
+  var lastHref = location.href;
+  function watchUrl() {
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      dirty = true; stickX = null; setCurrent(null);
+      showBadge(5000);
+    }
   }
 
   function init() {
@@ -460,9 +652,11 @@
       new MutationObserver(onMutation).observe(document.documentElement, { childList: true, subtree: true });
     } catch (e) {}
     setInterval(checkVerify, 2000);
+    setInterval(watchUrl, 800);
     setTimeout(function () {
-      if (!document.activeElement || document.activeElement === document.body) {
-        var list = getFocusables();
+      showBadge(8000);
+      var list = getFocusables();
+      if (!current && list.length) {
         var first = pickInitial(list);
         if (first) {
           var fr = first.getBoundingClientRect();
