@@ -279,13 +279,15 @@
     return vids[0] || null;
   }
 
+  // true, ha mi kezeltük a Back gombot; false, ha az alapértelmezett
+  // viselkedést (kilépés az appból) hagyjuk
   function goBack() {
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen();
-      return;
+      return true;
     }
-    if (history.length > 1) { history.back(); return; }
-    try { tizen.application.getCurrentApplication().exit(); } catch (e) {}
+    if (history.length > 1) { history.back(); return true; }
+    return false;
   }
 
   document.addEventListener('keydown', function (e) {
@@ -294,8 +296,7 @@
 
     // Back
     if (code === K.BACK || code === 27) {
-      e.preventDefault();
-      goBack();
+      if (goBack()) e.preventDefault();
       return;
     }
 
